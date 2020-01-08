@@ -31,6 +31,13 @@
 
 #include"../../../include/System.h"
 
+#include<geometry_msgs/PoseStamped.h>
+#include<tf/tf.h>
+#include<tf/transform_datatypes.h>
+#include"../../../include/Converter.h"
+
+#define MAP_SCALE 1.0f
+
 using namespace std;
 
 class ImageGrabber
@@ -42,6 +49,8 @@ public:
 
     ORB_SLAM2::System* mpSLAM;
 };
+
+ros::Publisher pose_pub;
 
 int main(int argc, char **argv)
 {
@@ -62,6 +71,7 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nodeHandler;
     ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    pose_pub = nodeHandler.advertise<geometry_msgs::PoseStamped>("orb_pose", 100);
 
     ros::spin();
 
@@ -90,7 +100,50 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
         return;
     }
 
-    mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    cv::Mat Tcw = mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+
+    ////////////////////////////////////////////////////////////////////////////////
+    geometry_msgs::PoseStamped pose;
+    pose.header.stamp = cv_ptr->header.stamp;
+    pose.header.frame_id ="world";
+
+
+    tf::Transform new_transform;
+    if(Tcw.empty()){
+        tf::poseTFToMsg(new_transform, pose.pose);
+        pose_pub.publish(pose);
+    }else{
+
+        cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+
+        vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+
+        new_transform.setOrigin(tf::Vector3(twc.at<float>(0, 0) * MAP_SCALE, twc.at<float>(0, 1) * MAP_SCALE, twc.at<float>(0, 2) * MAP_SCALE));
+
+        tf::Quaternion tf_quaternion(q[0], q[1], q[2], q[3]);
+
+        new_transform.setRotation(tf_quaternion);
+        tf::poseTFToMsg(new_transform, pose.pose);
+        pose_pub.publish(pose);
+    }
+    /*geometry_msgs::PoseStamped pose;
+    pose.header.stamp = ros::Time::now();
+    pose.header.frame_id ="map";
+
+    cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t(); // Rotation information
+    cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3); // translation information
+    vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+
+    tf::Transform new_transform;
+    new_transform.setOrigin(tf::Vector3(twc.at<float>(0, 0), twc.at<float>(0, 1), twc.at<float>(0, 2)));
+
+    tf::Quaternion quaternion(q[0], q[1], q[2], q[3]);
+    new_transform.setRotation(quaternion);
+
+    tf::poseTFToMsg(new_transform, pose.pose);
+    pose_pub.publish(pose);*/
+
 }
 
 
